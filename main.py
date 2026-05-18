@@ -33,17 +33,18 @@ async def download_audio(request: DownloadRequest):
             with open(cookies_file, "w") as f:
                 f.write(request.cookies)
 
-        ydl_opts = {
-            "format": "bestaudio/best",
-            "outtmpl": output_template,
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            }],
-            "quiet": True,
-            "no_warnings": True,
-        }
+       ydl_opts = {
+    "format": "bestaudio[ext=m4a]/bestaudio/best",
+    "outtmpl": output_template,
+    "ffmpeg_location": "/usr/bin/ffmpeg",
+    "postprocessors": [{
+        "key": "FFmpegExtractAudio",
+        "preferredcodec": "mp3",
+        "preferredquality": "192",
+    }],
+    "quiet": True,
+    "no_warnings": True,
+}
 
         if cookies_file:
             ydl_opts["cookiefile"] = cookies_file
