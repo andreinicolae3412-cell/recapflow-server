@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import yt_dlp
+import imageio_ffmpeg
 import tempfile
 import os
 import uuid
@@ -21,6 +22,7 @@ class DownloadRequest(BaseModel):
 
 @app.post("/download-audio")
 async def download_audio(request: DownloadRequest):
+    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
     tmp_dir = tempfile.mkdtemp()
     unique_id = str(uuid.uuid4())
     output_template = os.path.join(tmp_dir, f"{unique_id}.%(ext)s")
@@ -34,7 +36,7 @@ async def download_audio(request: DownloadRequest):
         ydl_opts = {
             "format": "bestaudio[ext=m4a]/bestaudio/best",
             "outtmpl": output_template,
-            "ffmpeg_location": "/usr/bin/ffmpeg",
+            "ffmpeg_location": ffmpeg_path,
             "postprocessors": [{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
