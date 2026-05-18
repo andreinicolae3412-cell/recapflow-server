@@ -8,7 +8,6 @@ import uuid
 from pydantic import BaseModel
 
 app = FastAPI()
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,25 +25,24 @@ async def download_audio(request: DownloadRequest):
     unique_id = str(uuid.uuid4())
     output_template = os.path.join(tmp_dir, f"{unique_id}.%(ext)s")
     cookies_file = None
-
     try:
         if request.cookies and request.cookies.strip():
             cookies_file = os.path.join(tmp_dir, "cookies.txt")
             with open(cookies_file, "w") as f:
                 f.write(request.cookies)
 
-       ydl_opts = {
-    "format": "bestaudio[ext=m4a]/bestaudio/best",
-    "outtmpl": output_template,
-    "ffmpeg_location": "/usr/bin/ffmpeg",
-    "postprocessors": [{
-        "key": "FFmpegExtractAudio",
-        "preferredcodec": "mp3",
-        "preferredquality": "192",
-    }],
-    "quiet": True,
-    "no_warnings": True,
-}
+        ydl_opts = {
+            "format": "bestaudio[ext=m4a]/bestaudio/best",
+            "outtmpl": output_template,
+            "ffmpeg_location": "/usr/bin/ffmpeg",
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }],
+            "quiet": True,
+            "no_warnings": True,
+        }
 
         if cookies_file:
             ydl_opts["cookiefile"] = cookies_file
