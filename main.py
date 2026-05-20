@@ -2,11 +2,13 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 import yt_dlp
-import imageio_ffmpeg
+import static_ffmpeg
 import tempfile
 import os
 import uuid
 from pydantic import BaseModel
+
+static_ffmpeg.add_paths()
 
 app = FastAPI()
 
@@ -36,7 +38,6 @@ class DownloadRequest(BaseModel):
 
 @app.post("/download-audio")
 async def download_audio(request: DownloadRequest):
-    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
     tmp_dir = tempfile.mkdtemp()
     unique_id = str(uuid.uuid4())
     output_template = os.path.join(tmp_dir, f"{unique_id}.%(ext)s")
@@ -50,7 +51,6 @@ async def download_audio(request: DownloadRequest):
         ydl_opts = {
             "format": "bestaudio[ext=m4a]/bestaudio/best",
             "outtmpl": output_template,
-            "ffmpeg_location": ffmpeg_path,
             "postprocessors": [{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
