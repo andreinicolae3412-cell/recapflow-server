@@ -1,6 +1,6 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 import yt_dlp
 import imageio_ffmpeg
 import tempfile
@@ -9,11 +9,25 @@ import uuid
 from pydantic import BaseModel
 
 app = FastAPI()
+
+@app.options("/{rest_of_path:path}")
+async def preflight_handler(request: Request, rest_of_path: str):
+    return JSONResponse(
+        content={},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=False,
+    expose_headers=["*"],
 )
 
 class DownloadRequest(BaseModel):
@@ -54,11 +68,13 @@ async def download_audio(request: DownloadRequest):
 
         for f in os.listdir(tmp_dir):
             if f.endswith(".mp3"):
-                return FileResponse(
+                response = FileResponse(
                     os.path.join(tmp_dir, f),
                     media_type="audio/mpeg",
                     filename="audio.mp3"
                 )
+                response.headers["Access-Control-Allow-Origin"] = "*"
+                return response
 
         raise HTTPException(status_code=500, detail="Fișierul audio nu a fost găsit")
 
