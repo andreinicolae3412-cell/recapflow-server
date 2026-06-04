@@ -42,6 +42,7 @@ async def download_audio(request: DownloadRequest):
     unique_id = str(uuid.uuid4())
     output_template = os.path.join(tmp_dir, f"{unique_id}.%(ext)s")
     cookies_file = None
+
     try:
         if request.cookies and request.cookies.strip():
             cookies_file = os.path.join(tmp_dir, "cookies.txt")
@@ -49,7 +50,7 @@ async def download_audio(request: DownloadRequest):
                 f.write(request.cookies)
 
         ydl_opts = {
-            "format": "bestaudio[ext=m4a]/bestaudio/best",
+            "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
             "outtmpl": output_template,
             "postprocessors": [{
                 "key": "FFmpegExtractAudio",
@@ -58,6 +59,16 @@ async def download_audio(request: DownloadRequest):
             }],
             "quiet": True,
             "no_warnings": True,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["web", "android"],
+                }
+            },
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            },
+            "socket_timeout": 30,
+            "retries": 3,
         }
 
         if cookies_file:
