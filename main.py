@@ -2,10 +2,15 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 import yt_dlp
+import imageio_ffmpeg
 import tempfile
 import os
 import uuid
 from pydantic import BaseModel
+
+# Obține calea ffmpeg din imageio_ffmpeg
+FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
+FFMPEG_DIR = os.path.dirname(FFMPEG_PATH)
 
 app = FastAPI()
 
@@ -54,6 +59,7 @@ async def download_audio(request: DownloadRequest):
                 "preferredcodec": "mp3",
                 "preferredquality": "192",
             }],
+            "ffmpeg_location": FFMPEG_DIR,
             "quiet": True,
             "no_warnings": True,
             "extractor_args": {
@@ -91,4 +97,4 @@ async def download_audio(request: DownloadRequest):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "ffmpeg_path": FFMPEG_PATH}
