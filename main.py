@@ -1,50 +1,24 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 import yt_dlp
-import static_ffmpeg
 import tempfile
 import os
 import uuid
 from pydantic import BaseModel
 
-static_ffmpeg.add_paths()
-
-import shutil
-FFMPEG_PATH = shutil.which("ffmpeg") or "ffmpeg"
-FFPROBE_PATH = shutil.which("ffprobe") or "ffprobe"
-print(f"[STARTUP] ffmpeg: {FFMPEG_PATH}")
-print(f"[STARTUP] ffprobe: {FFPROBE_PATH}")
-
 app = FastAPI()
-
-
-@app.options("/{rest_of_path:path}")
-async def preflight_handler(request: Request, rest_of_path: str):
-    return JSONResponse(
-        content={},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-            "Access-Control-Allow-Headers": "*",
-        }
-    )
-
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
-    allow_credentials=False,
-    expose_headers=["*"],
 )
-
 
 class DownloadRequest(BaseModel):
     url: str
     cookies: str = ""
-
 
 @app.post("/download-audio")
 async def download_audio(request: DownloadRequest):
@@ -60,19 +34,15 @@ async def download_audio(request: DownloadRequest):
                 f.write(request.cookies)
 
         ydl_opts = {
-            "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
+            "format": "bestaudio/best",
             "outtmpl": output_template,
             "postprocessors": [{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
                 "preferredquality": "192",
             }],
-            "ffmpeg_location": FFMPEG_PATH,
             "quiet": True,
             "no_warnings": True,
-            "noplaylist": True,
-            "socket_timeout": 30,
-            "retries": 3,
         }
 
         if cookies_file:
@@ -83,19 +53,16 @@ async def download_audio(request: DownloadRequest):
 
         for f in os.listdir(tmp_dir):
             if f.endswith(".mp3"):
-                response = FileResponse(
+                return FileResponse(
                     os.path.join(tmp_dir, f),
                     media_type="audio/mpeg",
                     filename="audio.mp3"
                 )
-                response.headers["Access-Control-Allow-Origin"] = "*"
-                return response
 
         raise HTTPException(status_code=500, detail="Fișierul audio nu a fost găsit")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/health")
 async def health():
