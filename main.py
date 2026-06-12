@@ -5,19 +5,8 @@ import yt_dlp
 import tempfile
 import os
 import uuid
-import shutil
+import subprocess
 from pydantic import BaseModel
-
-# Detectează ffmpeg automat
-FFMPEG_PATH = shutil.which("ffmpeg")
-if not FFMPEG_PATH:
-    try:
-        import imageio_ffmpeg
-        FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
-    except ImportError:
-        FFMPEG_PATH = None
-
-FFMPEG_DIR = os.path.dirname(FFMPEG_PATH) if FFMPEG_PATH else None
 
 app = FastAPI()
 
@@ -80,9 +69,6 @@ async def download_audio(request: DownloadRequest):
             "retries": 3,
         }
 
-        if FFMPEG_DIR:
-            ydl_opts["ffmpeg_location"] = FFMPEG_DIR
-
         if cookies_file:
             ydl_opts["cookiefile"] = cookies_file
 
@@ -106,8 +92,10 @@ async def download_audio(request: DownloadRequest):
 
 @app.get("/health")
 async def health():
+    import shutil
     return {
         "status": "ok",
-        "ffmpeg_path": FFMPEG_PATH,
-        "ffmpeg_dir": FFMPEG_DIR
+        "ffmpeg": shutil.which("ffmpeg"),
+        "ffprobe": shutil.which("ffprobe"),
+        "yt_dlp_version": yt_dlp.version.__version__
     }
