@@ -5,6 +5,7 @@ import yt_dlp
 import tempfile
 import os
 import uuid
+import shutil
 from pydantic import BaseModel
 
 app = FastAPI()
@@ -19,6 +20,15 @@ app.add_middleware(
 class DownloadRequest(BaseModel):
     url: str
     cookies: str = ""
+
+def get_ffmpeg_path():
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        return os.path.dirname(ffmpeg)
+    for path in ["/usr/bin", "/usr/local/bin", "/nix/var/nix/profiles/default/bin"]:
+        if os.path.exists(os.path.join(path, "ffmpeg")):
+            return path
+    return None
 
 @app.post("/download-audio")
 async def download_audio(request: DownloadRequest):
@@ -45,6 +55,10 @@ async def download_audio(request: DownloadRequest):
             "no_warnings": True,
         }
 
+        ffmpeg_path = get_ffmpeg_path()
+        if ffmpeg_path:
+            ydl_opts["ffmpeg_location"] = ffmpeg_path
+
         if cookies_file:
             ydl_opts["cookiefile"] = cookies_file
 
@@ -66,4 +80,9 @@ async def download_audio(request: DownloadRequest):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    ffmpeg_path = get_ffmpeg_path()
+    return {
+        "status": "ok",
+        "ffmpeg_found": ffmpeg_path is not None,
+        "ffmpeg_path": ffmpeg_path
+    }
