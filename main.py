@@ -188,3 +188,39 @@ async def download_audio(request: DownloadRequest, background_tasks: BackgroundT
 @app.get("/health")
 async def health():
     return {"status": "ok", "yt_dlp_version": yt_dlp.version.__version__}
+import subprocess
+
+@app.get("/debug-ffmpeg")
+async def debug_ffmpeg():
+    results = {}
+    
+    # Încearcă 'which ffmpeg'
+    try:
+        r = subprocess.run(["which", "ffmpeg"], capture_output=True, text=True)
+        results["which_ffmpeg"] = r.stdout.strip() or r.stderr.strip()
+    except Exception as e:
+        results["which_ffmpeg"] = str(e)
+    
+    # Încearcă 'which ffprobe'
+    try:
+        r = subprocess.run(["which", "ffprobe"], capture_output=True, text=True)
+        results["which_ffprobe"] = r.stdout.strip() or r.stderr.strip()
+    except Exception as e:
+        results["which_ffprobe"] = str(e)
+
+    # Caută în locații comune
+    common_paths = ["/usr/bin", "/usr/local/bin", "/nix/var/nix/profiles/default/bin", "/run/current-system/sw/bin"]
+    found = []
+    for p in common_paths:
+        if os.path.exists(os.path.join(p, "ffmpeg")):
+            found.append(p)
+    results["found_in"] = found
+
+    # find ca fallback
+    try:
+        r = subprocess.run(["find", "/", "-name", "ffmpeg", "-type", "f"], capture_output=True, text=True, timeout=10)
+        results["find_result"] = r.stdout.strip().split("\n")
+    except Exception as e:
+        results["find_result"] = str(e)
+
+    return results
