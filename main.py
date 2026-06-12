@@ -41,7 +41,7 @@ class DownloadRequest(BaseModel):
     cookies: str = ""
 
 
-DOWNLOAD_STRATEGIES = [
+YOUTUBE_STRATEGIES = [
     {
         "name": "android_embedded",
         "extractor_args": {"youtube": {"player_client": ["android_embedded"]}},
@@ -93,12 +93,76 @@ DOWNLOAD_STRATEGIES = [
     },
 ]
 
+# Strategii separate pentru TikTok
+TIKTOK_STRATEGIES = [
+    {
+        "name": "tiktok_mobile",
+        "extractor_args": {},
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+            "Referer": "https://www.tiktok.com/",
+        },
+    },
+    {
+        "name": "tiktok_desktop",
+        "extractor_args": {},
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Referer": "https://www.tiktok.com/",
+        },
+    },
+    {
+        "name": "tiktok_android",
+        "extractor_args": {},
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.165 Mobile Safari/537.36",
+            "Referer": "https://www.tiktok.com/",
+        },
+    },
+]
+
+
+def is_tiktok(url: str) -> bool:
+    return "tiktok.com" in url.lower()
+
 
 def cleanup_dir(path: str):
     try:
         shutil.rmtree(path, ignore_errors=True)
     except Exception:
         pass
+
+
+def build_ydl_opts(output_template: str, strategy: dict, cookies_file: str = None) -> dict:
+    opts = {
+        "format": "bestaudio/best",
+        "outtmpl": output_template,
+        "postprocessors": [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
+        }],
+        "postprocessor_args": {
+            "FFmpegExtractAudio": ["-vn", "-acodec", "libmp3lame", "-q:a", "2"]
+        },
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+        "noplaylist": True,
+        "http_headers": strategy["http_headers"],
+        "socket_timeout": 30,
+        "retries": 2,
+        "fragment_retries": 2,
+        "ignoreerrors": False,
+    }
+
+    if strategy.get("extractor_args"):
+        opts["extractor_args"] = strategy["extractor_args"]
+
+    if cookies_file:
+        opts["cookiefile"] = cookies_file
+
+    return opts
 
 
 @app.post("/download-audio")
@@ -115,37 +179,15 @@ async def download_audio(request: DownloadRequest, background_tasks: BackgroundT
             with open(cookies_file, "w") as f:
                 f.write(request.cookies)
 
-        for strategy in DOWNLOAD_STRATEGIES:
+        # Alege strategiile în funcție de platformă
+        strategies = TIKTOK_STRATEGIES if is_tiktok(request.url) else YOUTUBE_STRATEGIES
+
+        for strategy in strategies:
             unique_id = str(uuid.uuid4())
             output_template = os.path.join(tmp_dir, f"{unique_id}.%(ext)s")
 
             try:
-                ydl_opts = {
-                    "format": "bestaudio/best",  # <-- modificat: funcționează cu TikTok
-                    "outtmpl": output_template,
-                    "postprocessors": [{
-                        "key": "FFmpegExtractAudio",
-                        "preferredcodec": "mp3",
-                        "preferredquality": "192",
-                    }],
-                    # <-- adăugat: forțează ffmpeg să extragă audio corect
-                    "postprocessor_args": {
-                        "FFmpegExtractAudio": ["-vn", "-acodec", "libmp3lame", "-q:a", "2"]
-                    },
-                    "quiet": True,
-                    "no_warnings": True,
-                    "noprogress": True,
-                    "noplaylist": True,
-                    "extractor_args": strategy["extractor_args"],
-                    "http_headers": strategy["http_headers"],
-                    "socket_timeout": 30,
-                    "retries": 2,
-                    "fragment_retries": 2,
-                    "ignoreerrors": False,
-                }
-
-                if cookies_file:
-                    ydl_opts["cookiefile"] = cookies_file
+                ydl_opts = build_ydl_opts(output_template, strategy, cookies_file)
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([request.url])
@@ -182,7 +224,7 @@ async def download_audio(request: DownloadRequest, background_tasks: BackgroundT
 
         raise HTTPException(
             status_code=500,
-            detail=f"Toate strategiile ({len(DOWNLOAD_STRATEGIES)}) au eșuat. Ultima eroare: {last_error}"
+            detail=f"Toate strategiile ({len(strategies)}) au eșuat. Ultima eroare: {last_error}"
         )
 
     except HTTPException:
