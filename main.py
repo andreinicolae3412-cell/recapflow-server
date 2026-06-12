@@ -7,6 +7,11 @@ import shutil
 import os
 import uuid
 from pydantic import BaseModel
+import imageio_ffmpeg
+
+# Obține calea către ffmpeg din imageio-ffmpeg
+FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
+FFMPEG_DIR = os.path.dirname(FFMPEG_PATH)
 
 app = FastAPI()
 
@@ -125,6 +130,7 @@ async def download_audio(request: DownloadRequest, background_tasks: BackgroundT
                         "preferredcodec": "mp3",
                         "preferredquality": "192",
                     }],
+                    "ffmpeg_location": FFMPEG_DIR,
                     "quiet": True,
                     "no_warnings": True,
                     "noprogress": True,
@@ -186,4 +192,4 @@ async def download_audio(request: DownloadRequest, background_tasks: BackgroundT
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "yt_dlp_version": yt_dlp.version.__version__}
+    return {"status": "ok", "yt_dlp_version": yt_dlp.version.__version__, "ffmpeg_path": FFMPEG_PATH}
