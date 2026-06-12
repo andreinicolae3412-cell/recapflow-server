@@ -11,6 +11,12 @@ from pydantic import BaseModel
 
 static_ffmpeg.add_paths()
 
+# Găsește calea exactă către ffmpeg instalat de static_ffmpeg
+import shutil as shutil_which
+FFMPEG_PATH = shutil_which.which("ffmpeg") or ""
+print(f"[STARTUP] ffmpeg path: {FFMPEG_PATH}")
+print(f"[STARTUP] ffprobe path: {shutil_which.which('ffprobe')}")
+
 app = FastAPI()
 
 
@@ -57,24 +63,10 @@ YOUTUBE_STRATEGIES = [
         },
     },
     {
-        "name": "android_vr",
-        "extractor_args": {"youtube": {"player_client": ["android_vr"]}},
-        "http_headers": {
-            "User-Agent": "com.google.android.apps.youtube.vr.oculus/1.56.120 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
-        },
-    },
-    {
         "name": "tvhtml5",
         "extractor_args": {"youtube": {"player_client": ["tvhtml5"]}},
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (SMART-TV; Linux; Tizen 5.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/5.0 TV Safari/538.1",
-        },
-    },
-    {
-        "name": "mweb",
-        "extractor_args": {"youtube": {"player_client": ["mweb"]}},
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.165 Mobile Safari/537.36",
         },
     },
     {
@@ -84,16 +76,8 @@ YOUTUBE_STRATEGIES = [
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
         },
     },
-    {
-        "name": "ios",
-        "extractor_args": {"youtube": {"player_client": ["ios"]}},
-        "http_headers": {
-            "User-Agent": "com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)",
-        },
-    },
 ]
 
-# Strategii separate pentru TikTok
 TIKTOK_STRATEGIES = [
     {
         "name": "tiktok_mobile",
@@ -111,14 +95,6 @@ TIKTOK_STRATEGIES = [
             "Referer": "https://www.tiktok.com/",
         },
     },
-    {
-        "name": "tiktok_android",
-        "extractor_args": {},
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.165 Mobile Safari/537.36",
-            "Referer": "https://www.tiktok.com/",
-        },
-    },
 ]
 
 
@@ -131,38 +107,6 @@ def cleanup_dir(path: str):
         shutil.rmtree(path, ignore_errors=True)
     except Exception:
         pass
-
-
-def build_ydl_opts(output_template: str, strategy: dict, cookies_file: str = None) -> dict:
-    opts = {
-        "format": "bestaudio/best",
-        "outtmpl": output_template,
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "192",
-        }],
-        "postprocessor_args": {
-            "FFmpegExtractAudio": ["-vn", "-acodec", "libmp3lame", "-q:a", "2"]
-        },
-        "quiet": True,
-        "no_warnings": True,
-        "noprogress": True,
-        "noplaylist": True,
-        "http_headers": strategy["http_headers"],
-        "socket_timeout": 30,
-        "retries": 2,
-        "fragment_retries": 2,
-        "ignoreerrors": False,
-    }
-
-    if strategy.get("extractor_args"):
-        opts["extractor_args"] = strategy["extractor_args"]
-
-    if cookies_file:
-        opts["cookiefile"] = cookies_file
-
-    return opts
 
 
 @app.post("/download-audio")
@@ -179,7 +123,6 @@ async def download_audio(request: DownloadRequest, background_tasks: BackgroundT
             with open(cookies_file, "w") as f:
                 f.write(request.cookies)
 
-        # Alege strategiile în funcție de platformă
         strategies = TIKTOK_STRATEGIES if is_tiktok(request.url) else YOUTUBE_STRATEGIES
 
         for strategy in strategies:
@@ -187,18 +130,72 @@ async def download_audio(request: DownloadRequest, background_tasks: BackgroundT
             output_template = os.path.join(tmp_dir, f"{unique_id}.%(ext)s")
 
             try:
-                ydl_opts = build_ydl_opts(output_template, strategy, cookies_file)
+                ydl_opts = {
+                    "format": "bestaudio/best",
+                    "outtmpl": output_template,
+                    # NU mai folosim FFmpegExtractAudio — cauzează problema cu ffprobe
+                    # În schimb convertim manual după download
+                    "quiet": False,  # temporar verbose ca să vedem ce se întâmplă
+                    "no_warnings": False,
+                    "noprogress": True,
+                    "noplaylist": True,
+                    "http_headers": strategy["http_headers"],
+                    "socket_timeout": 30,
+                    "retries": 2,
+                    "fragment_retries": 2,
+                    "ignoreerrors": False,
+                }
+
+                if strategy.get("extractor_args"):
+                    ydl_opts["extractor_args"] = strategy["extractor_args"]
+
+                if cookies_file:
+                    ydl_opts["cookiefile"] = cookies_file
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([request.url])
 
-                mp3_file = None
+                # Găsește fișierul descărcat (orice extensie)
+                downloaded_file = None
                 for f in os.listdir(tmp_dir):
-                    if f.startswith(unique_id) and f.endswith(".mp3"):
-                        mp3_file = os.path.join(tmp_dir, f)
+                    if f.startswith(unique_id) and not f.endswith(".mp3") and f != "cookies.txt":
+                        downloaded_file = os.path.join(tmp_dir, f)
                         break
 
-                if mp3_file and os.path.exists(mp3_file) and os.path.getsize(mp3_file) > 0:
+                if not downloaded_file or not os.path.exists(downloaded_file):
+                    last_error = "Fișierul descărcat nu a fost găsit"
+                    continue
+
+                print(f"[DEBUG] Fișier descărcat: {downloaded_file}, size: {os.path.getsize(downloaded_file)}")
+
+                # Convertim manual cu ffmpeg, fără ffprobe
+                mp3_file = os.path.join(tmp_dir, f"{unique_id}.mp3")
+                import subprocess
+                ffmpeg_cmd = [
+                    FFMPEG_PATH or "ffmpeg",
+                    "-y",                    # suprascrie dacă există
+                    "-i", downloaded_file,   # input
+                    "-vn",                   # fără video
+                    "-acodec", "libmp3lame", # codec audio
+                    "-ab", "192k",           # bitrate
+                    "-ar", "44100",          # sample rate
+                    mp3_file
+                ]
+
+                result = subprocess.run(
+                    ffmpeg_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=120
+                )
+
+                print(f"[DEBUG] ffmpeg returncode: {result.returncode}")
+                if result.returncode != 0:
+                    print(f"[DEBUG] ffmpeg stderr: {result.stderr[-500:]}")
+                    last_error = f"ffmpeg conversion failed: {result.stderr[-200:]}"
+                    continue
+
+                if os.path.exists(mp3_file) and os.path.getsize(mp3_file) > 0:
                     response = FileResponse(
                         mp3_file,
                         media_type="audio/mpeg",
@@ -210,6 +207,7 @@ async def download_audio(request: DownloadRequest, background_tasks: BackgroundT
 
             except yt_dlp.utils.DownloadError as e:
                 last_error = str(e)
+                print(f"[DEBUG] DownloadError strategy {strategy['name']}: {last_error}")
                 for f in os.listdir(tmp_dir):
                     if f.startswith(unique_id) and f != "cookies.txt":
                         try:
@@ -220,6 +218,7 @@ async def download_audio(request: DownloadRequest, background_tasks: BackgroundT
 
             except Exception as e:
                 last_error = str(e)
+                print(f"[DEBUG] Exception strategy {strategy['name']}: {last_error}")
                 continue
 
         raise HTTPException(
