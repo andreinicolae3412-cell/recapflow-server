@@ -6,9 +6,13 @@ import static_ffmpeg
 import tempfile
 import os
 import uuid
+import shutil
 from pydantic import BaseModel
 
 static_ffmpeg.add_paths()
+
+FFMPEG_PATH = shutil.which("ffmpeg")
+FFMPEG_DIR = os.path.dirname(FFMPEG_PATH) if FFMPEG_PATH else None
 
 app = FastAPI()
 
@@ -57,6 +61,7 @@ async def download_audio(request: DownloadRequest):
                 "preferredcodec": "mp3",
                 "preferredquality": "192",
             }],
+            "ffmpeg_location": FFMPEG_DIR,
             "quiet": True,
             "no_warnings": True,
             "extractor_args": {
@@ -94,10 +99,10 @@ async def download_audio(request: DownloadRequest):
 
 @app.get("/health")
 async def health():
-    import shutil
     return {
         "status": "ok",
         "ffmpeg": shutil.which("ffmpeg"),
         "ffprobe": shutil.which("ffprobe"),
+        "ffmpeg_dir": FFMPEG_DIR,
         "yt_dlp_version": yt_dlp.version.__version__
     }
