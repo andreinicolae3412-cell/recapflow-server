@@ -1,6 +1,5 @@
 [phases.setup]
 nixPkgs = ["ffmpeg", "python312"]
-aptPkgs = ["ffmpeg"]
 
 [phases.install]
 cmds = ["pip install -r requirements.txt"]
