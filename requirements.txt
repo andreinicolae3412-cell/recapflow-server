@@ -3,3 +3,4 @@ uvicorn
 yt-dlp==2025.5.22
 python-multipart
 pydantic
+imageio-ffmpeg
