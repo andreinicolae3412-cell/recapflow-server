@@ -2,15 +2,22 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 import yt_dlp
-import imageio_ffmpeg
 import tempfile
 import os
 import uuid
+import shutil
 from pydantic import BaseModel
 
-# Obține calea ffmpeg din imageio_ffmpeg
-FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
-FFMPEG_DIR = os.path.dirname(FFMPEG_PATH)
+# Detectează ffmpeg automat
+FFMPEG_PATH = shutil.which("ffmpeg")
+if not FFMPEG_PATH:
+    try:
+        import imageio_ffmpeg
+        FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        FFMPEG_PATH = None
+
+FFMPEG_DIR = os.path.dirname(FFMPEG_PATH) if FFMPEG_PATH else None
 
 app = FastAPI()
 
@@ -59,7 +66,6 @@ async def download_audio(request: DownloadRequest):
                 "preferredcodec": "mp3",
                 "preferredquality": "192",
             }],
-            "ffmpeg_location": FFMPEG_DIR,
             "quiet": True,
             "no_warnings": True,
             "extractor_args": {
@@ -73,6 +79,9 @@ async def download_audio(request: DownloadRequest):
             "socket_timeout": 30,
             "retries": 3,
         }
+
+        if FFMPEG_DIR:
+            ydl_opts["ffmpeg_location"] = FFMPEG_DIR
 
         if cookies_file:
             ydl_opts["cookiefile"] = cookies_file
@@ -97,4 +106,8 @@ async def download_audio(request: DownloadRequest):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "ffmpeg_path": FFMPEG_PATH}
+    return {
+        "status": "ok",
+        "ffmpeg_path": FFMPEG_PATH,
+        "ffmpeg_dir": FFMPEG_DIR
+    }
