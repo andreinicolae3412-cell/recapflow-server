@@ -1,8 +1,7 @@
 fastapi
 uvicorn
-yt-dlp==2025.5.22
+yt-dlp==2025.4.30
 python-multipart
 pydantic
 imageio-ffmpeg
 static-ffmpeg
-# updated
