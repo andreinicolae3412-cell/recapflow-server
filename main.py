@@ -44,6 +44,7 @@ class DownloadRequest(BaseModel):
 async def download_audio(request: DownloadRequest):
     tmp_dir = tempfile.mkdtemp()
     unique_id = str(uuid.uuid4())
+    mp3_output = os.path.join(tmp_dir, f"{unique_id}.mp3")
     cookies_file = None
 
     try:
@@ -55,8 +56,8 @@ async def download_audio(request: DownloadRequest):
         is_tiktok = "tiktok.com" in request.url
 
         if is_tiktok:
-            # TikTok: descarcă tot (video+audio) și muxează într-un singur mp4
-            output_path = os.path.join(tmp_dir, f"{unique_id}_tiktok.mp4")
+            # Pasul 1: descarcă video+audio combinat
+            raw_output = os.path.join(tmp_dir, f"{unique_id}_raw.mp4")
             ydl_opts = {
                 "format": "bestvideo+bestaudio/best",
                 "outtmpl": os.path.join(tmp_dir, f"{unique_id}_raw.%(ext)s"),
@@ -81,38 +82,35 @@ async def download_audio(request: DownloadRequest):
             # Găsește fișierul descărcat
             downloaded = None
             for f in os.listdir(tmp_dir):
-                if f.startswith(f"{unique_id}_raw") and f != "cookies.txt":
+                if f.startswith(f"{unique_id}_raw"):
                     downloaded = os.path.join(tmp_dir, f)
                     break
 
             if not downloaded or not os.path.exists(downloaded):
                 raise HTTPException(status_code=500, detail="Fișierul TikTok nu a fost descărcat")
 
-            # Muxează video+audio într-un mp4 cu ffmpeg
+            # Pasul 2: extrage audio din mp4 și convertește la mp3
             cmd = [
                 FFMPEG_PATH,
                 "-i", downloaded,
-                "-c", "copy",
-                output_path,
+                "-vn",
+                "-ar", "44100",
+                "-ac", "2",
+                "-b:a", "192k",
+                mp3_output,
                 "-y"
             ]
-            subprocess.run(cmd, capture_output=True, timeout=120)
+            result = subprocess.run(cmd, capture_output=True, timeout=120)
 
-            final_file = output_path if os.path.exists(output_path) and os.path.getsize(output_path) > 0 else downloaded
-
-            response = FileResponse(
-                final_file,
-                media_type="video/mp4",
-                filename="audio.mp4"
-            )
-            response.headers["Access-Control-Allow-Origin"] = "*"
-            return response
+            if result.returncode != 0 or not os.path.exists(mp3_output) or os.path.getsize(mp3_output) == 0:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Conversia TikTok eșuată: {result.stderr.decode()[:300]}"
+                )
 
         else:
-            # YouTube și altele: audio direct
+            # YouTube și altele
             output_template = os.path.join(tmp_dir, f"{unique_id}.%(ext)s")
-            mp3_output = os.path.join(tmp_dir, f"{unique_id}.mp3")
-
             ydl_opts = {
                 "format": "bestaudio/best",
                 "outtmpl": output_template,
@@ -158,15 +156,18 @@ async def download_audio(request: DownloadRequest):
             result = subprocess.run(cmd, capture_output=True, timeout=120)
 
             if result.returncode != 0 or not os.path.exists(mp3_output) or os.path.getsize(mp3_output) == 0:
-                raise HTTPException(status_code=500, detail=f"Conversia eșuată: {result.stderr.decode()[:300]}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Conversia eșuată: {result.stderr.decode()[:300]}"
+                )
 
-            response = FileResponse(
-                mp3_output,
-                media_type="audio/mpeg",
-                filename="audio.mp3"
-            )
-            response.headers["Access-Control-Allow-Origin"] = "*"
-            return response
+        response = FileResponse(
+            mp3_output,
+            media_type="audio/mpeg",
+            filename="audio.mp3"
+        )
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        return response
 
     except HTTPException:
         raise
