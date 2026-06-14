@@ -44,7 +44,6 @@ class DownloadRequest(BaseModel):
 async def download_audio(request: DownloadRequest):
     tmp_dir = tempfile.mkdtemp()
     unique_id = str(uuid.uuid4())
-    mp3_output = os.path.join(tmp_dir, f"{unique_id}.mp3")
     cookies_file = None
 
     try:
@@ -56,16 +55,17 @@ async def download_audio(request: DownloadRequest):
         is_tiktok = "tiktok.com" in request.url
 
         if is_tiktok:
-            # Pentru TikTok: descarcă video+audio combinat (format mp4)
-            output_template = os.path.join(tmp_dir, f"{unique_id}.mp4")
+            # TikTok: descarcă tot (video+audio) și muxează într-un singur mp4
+            output_path = os.path.join(tmp_dir, f"{unique_id}_tiktok.mp4")
             ydl_opts = {
-                "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-                "outtmpl": output_template,
+                "format": "bestvideo+bestaudio/best",
+                "outtmpl": os.path.join(tmp_dir, f"{unique_id}_raw.%(ext)s"),
                 "quiet": True,
                 "no_warnings": True,
                 "socket_timeout": 30,
                 "retries": 3,
                 "noplaylist": True,
+                "ffmpeg_location": FFMPEG_DIR,
                 "merge_output_format": "mp4",
                 "http_headers": {
                     "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.165 Mobile Safari/537.36",
@@ -78,38 +78,41 @@ async def download_audio(request: DownloadRequest):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([request.url])
 
-            # Găsește fișierul mp4 descărcat
+            # Găsește fișierul descărcat
             downloaded = None
             for f in os.listdir(tmp_dir):
-                if f.startswith(unique_id) and f != "cookies.txt":
+                if f.startswith(f"{unique_id}_raw") and f != "cookies.txt":
                     downloaded = os.path.join(tmp_dir, f)
                     break
 
             if not downloaded or not os.path.exists(downloaded):
                 raise HTTPException(status_code=500, detail="Fișierul TikTok nu a fost descărcat")
 
-            # Extrage audio din mp4 cu ffmpeg
+            # Muxează video+audio într-un mp4 cu ffmpeg
             cmd = [
                 FFMPEG_PATH,
                 "-i", downloaded,
-                "-map", "0:a:0",  # extrage primul stream audio
-                "-ar", "44100",
-                "-ac", "2",
-                "-b:a", "192k",
-                mp3_output,
+                "-c", "copy",
+                output_path,
                 "-y"
             ]
-            result = subprocess.run(cmd, capture_output=True, timeout=120)
+            subprocess.run(cmd, capture_output=True, timeout=120)
 
-            if result.returncode != 0 or not os.path.exists(mp3_output) or os.path.getsize(mp3_output) == 0:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Conversia TikTok eșuată: {result.stderr.decode()[:500]}"
-                )
+            final_file = output_path if os.path.exists(output_path) and os.path.getsize(output_path) > 0 else downloaded
+
+            response = FileResponse(
+                final_file,
+                media_type="video/mp4",
+                filename="audio.mp4"
+            )
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
 
         else:
-            # Pentru YouTube și alte platforme
+            # YouTube și altele: audio direct
             output_template = os.path.join(tmp_dir, f"{unique_id}.%(ext)s")
+            mp3_output = os.path.join(tmp_dir, f"{unique_id}.mp3")
+
             ydl_opts = {
                 "format": "bestaudio/best",
                 "outtmpl": output_template,
@@ -133,7 +136,6 @@ async def download_audio(request: DownloadRequest):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([request.url])
 
-            # Găsește fișierul descărcat
             downloaded = None
             for f in os.listdir(tmp_dir):
                 if f.startswith(unique_id) and f != "cookies.txt":
@@ -143,7 +145,6 @@ async def download_audio(request: DownloadRequest):
             if not downloaded or not os.path.exists(downloaded):
                 raise HTTPException(status_code=500, detail="Fișierul nu a fost descărcat")
 
-            # Convertește la mp3
             cmd = [
                 FFMPEG_PATH,
                 "-i", downloaded,
@@ -157,18 +158,15 @@ async def download_audio(request: DownloadRequest):
             result = subprocess.run(cmd, capture_output=True, timeout=120)
 
             if result.returncode != 0 or not os.path.exists(mp3_output) or os.path.getsize(mp3_output) == 0:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Conversia eșuată: {result.stderr.decode()[:500]}"
-                )
+                raise HTTPException(status_code=500, detail=f"Conversia eșuată: {result.stderr.decode()[:300]}")
 
-        response = FileResponse(
-            mp3_output,
-            media_type="audio/mpeg",
-            filename="audio.mp3"
-        )
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        return response
+            response = FileResponse(
+                mp3_output,
+                media_type="audio/mpeg",
+                filename="audio.mp3"
+            )
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
 
     except HTTPException:
         raise
