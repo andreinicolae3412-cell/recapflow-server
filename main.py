@@ -7,6 +7,7 @@ import tempfile
 import os
 import uuid
 import shutil
+import re
 from pydantic import BaseModel
 
 static_ffmpeg.add_paths()
@@ -39,28 +40,31 @@ class DownloadRequest(BaseModel):
     url: str
     cookies: str = ""
 
-STRATEGIES = [
-    {
-        "extractor_args": {"youtube": {"player_client": ["tv_embedded"]}},
-        "http_headers": {"User-Agent": "Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1"},
-    },
-    {
-        "extractor_args": {"youtube": {"player_client": ["ios"]}},
-        "http_headers": {"User-Agent": "com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)"},
-    },
-    {
-        "extractor_args": {"youtube": {"player_client": ["android_vr"]}},
-        "http_headers": {"User-Agent": "com.google.android.apps.youtube.vr.oculus/1.56.120 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip"},
-    },
-    {
-        "extractor_args": {"youtube": {"player_client": ["android"]}},
-        "http_headers": {"User-Agent": "com.google.android.youtube/19.30.36 (Linux; U; Android 14) gzip"},
-    },
-    {
-        "extractor_args": {"youtube": {"player_client": ["web"]}},
-        "http_headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"},
-    },
+# Instanțe Invidious publice gratuite — fallback una după alta
+INVIDIOUS_INSTANCES = [
+    "https://invidious.privacyredirect.com",
+    "https://inv.nadeko.net",
+    "https://invidious.nerdvpn.de",
+    "https://yt.artemislena.eu",
+    "https://invidious.lunar.icu",
 ]
+
+def get_video_id(url: str):
+    """Extrage video ID din URL YouTube"""
+    patterns = [
+        r"(?:youtube\.com/shorts/|youtu\.be/|youtube\.com/watch\?v=)([a-zA-Z0-9_-]{11})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+def is_youtube(url: str) -> bool:
+    return "youtube.com" in url or "youtu.be" in url
+
+def is_tiktok(url: str) -> bool:
+    return "tiktok.com" in url
 
 @app.post("/download-audio")
 async def download_audio(request: DownloadRequest):
@@ -74,7 +78,16 @@ async def download_audio(request: DownloadRequest):
             with open(cookies_file, "w") as f:
                 f.write(request.cookies)
 
-        for strategy in STRATEGIES:
+        urls_to_try = [request.url]
+
+        # Pentru YouTube, adaugă și URL-uri Invidious ca fallback
+        if is_youtube(request.url):
+            video_id = get_video_id(request.url)
+            if video_id:
+                for instance in INVIDIOUS_INSTANCES:
+                    urls_to_try.append(f"{instance}/watch?v={video_id}")
+
+        for url in urls_to_try:
             unique_id = str(uuid.uuid4())
             output_template = os.path.join(tmp_dir, f"{unique_id}.%(ext)s")
 
@@ -90,17 +103,33 @@ async def download_audio(request: DownloadRequest):
                     "ffmpeg_location": FFMPEG_DIR,
                     "quiet": True,
                     "no_warnings": True,
-                    "extractor_args": strategy["extractor_args"],
-                    "http_headers": strategy["http_headers"],
                     "socket_timeout": 30,
                     "retries": 2,
+                    "http_headers": {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                    },
                 }
+
+                # Setări specifice per platformă
+                if is_youtube(request.url) and url == request.url:
+                    ydl_opts["extractor_args"] = {
+                        "youtube": {
+                            "player_client": ["tv_embedded", "ios"],
+                        }
+                    }
+
+                if is_tiktok(request.url):
+                    ydl_opts["http_headers"] = {
+                        "User-Agent": "TikTok 26.2.0 rv:262018 (iPhone; iOS 14.4.2; en_US) Cronet",
+                        "Referer": "https://www.tiktok.com/",
+                    }
+                    ydl_opts["format"] = "bestaudio/best"
 
                 if cookies_file:
                     ydl_opts["cookiefile"] = cookies_file
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([request.url])
+                    ydl.download([url])
 
                 for f in os.listdir(tmp_dir):
                     if f.startswith(unique_id) and f.endswith(".mp3"):
