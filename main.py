@@ -38,13 +38,8 @@ class DownloadRequest(BaseModel):
     url: str
     cookies: str = ""
 
+
 def download_tiktok_audio(url: str, tmp_dir: str, cookies_file: str | None) -> str:
-    """
-    TikTok returnează adesea video-only ca 'bestaudio'.
-    Inspectăm formatele și alegem explicit unul cu acodec != none.
-    Dacă există format audio-only îl preferăm, altfel luăm video+audio
-    și extragem audio cu ffmpeg.
-    """
     headers = {
         "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.165 Mobile Safari/537.36",
         "Referer": "https://www.tiktok.com/",
@@ -59,46 +54,67 @@ def download_tiktok_audio(url: str, tmp_dir: str, cookies_file: str | None) -> s
     if cookies_file:
         base_opts["cookiefile"] = cookies_file
 
-    # Pas 1: inspectează formatele
-    with yt_dlp.YoutubeDL(base_opts) as ydl:
+    # Pas 1: extrage info cu logging activ ca sa vedem formatele
+    with yt_dlp.YoutubeDL({**base_opts, "quiet": False}) as ydl:
         info = ydl.extract_info(url, download=False)
 
-    audio_only_formats = []
-    video_audio_formats = []
-
-    for f in info.get("formats", []):
-        acodec = f.get("acodec") or "none"
-        vcodec = f.get("vcodec") or "none"
-        fmt_id = f.get("format_id", "")
-        abr = f.get("abr") or 0
-        tbr = f.get("tbr") or 0
-        score = abr or tbr
-
-        if acodec == "none":
-            continue  # video-only, skip
-
-        if vcodec == "none":
-            audio_only_formats.append((score, fmt_id))
-        else:
-            video_audio_formats.append((score, fmt_id))
-
-    if audio_only_formats:
-        audio_only_formats.sort(reverse=True)
-        chosen = audio_only_formats[0][1]
-    elif video_audio_formats:
-        video_audio_formats.sort(reverse=True)
-        chosen = video_audio_formats[0][1]
-    else:
-        fmt_debug = [
-            f"id={f.get('format_id')} acodec={f.get('acodec')} vcodec={f.get('vcodec')} abr={f.get('abr')}"
-            for f in info.get("formats", [])
-        ]
-        raise HTTPException(
-            status_code=500,
-            detail="TikTok: niciun format cu audio.\n" + "\n".join(fmt_debug)
+    # Pas 2: loghează TOATE formatele
+    all_formats = info.get("formats", [])
+    format_log = []
+    for f in all_formats:
+        format_log.append(
+            f"id={f.get('format_id')} "
+            f"ext={f.get('ext')} "
+            f"acodec={f.get('acodec')} "
+            f"vcodec={f.get('vcodec')} "
+            f"abr={f.get('abr')} "
+            f"tbr={f.get('tbr')} "
+            f"note={f.get('format_note', '')}"
         )
 
-    # Pas 2: descarcă formatul ales
+    print("=== TIKTOK FORMATE ===")
+    for line in format_log:
+        print(line)
+    print("=== END FORMATE ===")
+
+    # Pas 3: caută formate cu audio - verificare strictă
+    audio_only = []
+    video_audio = []
+
+    for f in all_formats:
+        acodec = f.get("acodec")
+        vcodec = f.get("vcodec")
+        fmt_id = f.get("format_id", "")
+
+        # Skip dacă acodec e None, "none", gol sau lipsă
+        if not acodec or acodec == "none":
+            continue
+
+        abr = f.get("abr") or f.get("tbr") or 0
+
+        if not vcodec or vcodec == "none":
+            audio_only.append((abr, fmt_id))
+        else:
+            video_audio.append((abr, fmt_id))
+
+    print(f"Audio-only formats: {audio_only}")
+    print(f"Video+Audio formats: {video_audio}")
+
+    if audio_only:
+        audio_only.sort(reverse=True)
+        chosen = audio_only[0][1]
+        print(f"Ales audio-only: {chosen}")
+    elif video_audio:
+        video_audio.sort(reverse=True)
+        chosen = video_audio[0][1]
+        print(f"Ales video+audio: {chosen}")
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail="TikTok: niciun format cu audio gasit.\nFormate disponibile:\n" + "\n".join(format_log)
+        )
+
+    # Pas 4: descarca formatul ales
     raw_path = os.path.join(tmp_dir, "tiktok_raw")
     dl_opts = {
         **base_opts,
@@ -111,28 +127,43 @@ def download_tiktok_audio(url: str, tmp_dir: str, cookies_file: str | None) -> s
     with yt_dlp.YoutubeDL(dl_opts) as ydl:
         ydl.download([url])
 
-    # Găsește fișierul descărcat (yt-dlp adaugă extensia automat)
+    # Gaseste fisierul descarcat
     downloaded = None
     for f in os.listdir(tmp_dir):
         full = os.path.join(tmp_dir, f)
-        if os.path.isfile(full) and f != "cookies.txt":
+        if os.path.isfile(full) and f not in ("cookies.txt", "output.mp3"):
             downloaded = full
             break
 
     if not downloaded:
-        raise HTTPException(status_code=500, detail="TikTok: fișierul nu a fost descărcat")
+        raise HTTPException(status_code=500, detail="TikTok: fisierul nu a fost descarcat")
+
+    print(f"Descarcat: {downloaded}, size: {os.path.getsize(downloaded)}")
+
+    # Pas 5: verifica ca fisierul chiar are audio inainte de conversie
+    probe_cmd = [str(FFMPEG_PATH), "-i", downloaded]
+    probe = subprocess.run(probe_cmd, capture_output=True, timeout=30)
+    probe_output = probe.stderr.decode(errors="replace")
+    print(f"FFprobe output: {probe_output}")
+
+    if "Audio:" not in probe_output:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Fisierul descarcat NU contine audio!\n"
+                "Formate disponibile:\n" + "\n".join(format_log) +
+                f"\nFormat ales: {chosen}"
+                f"\nFFmpeg info: {probe_output[-500:]}"
+            )
+        )
 
     return downloaded
 
 
 def download_youtube_audio(url: str, tmp_dir: str, cookies_file: str | None) -> str:
-    """
-    YouTube: folosim mai mulți player clients ca fallback.
-    """
     raw_path = os.path.join(tmp_dir, "yt_raw")
 
     ydl_opts = {
-        # Selector robust: încearcă m4a, webm, orice audio, fallback la best
         "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
         "outtmpl": raw_path,
         "quiet": True,
@@ -142,7 +173,6 @@ def download_youtube_audio(url: str, tmp_dir: str, cookies_file: str | None) -> 
         "noplaylist": True,
         "extractor_args": {
             "youtube": {
-                # web are cel mai multe formate disponibile
                 "player_client": ["web", "ios", "android"],
             }
         },
@@ -159,22 +189,21 @@ def download_youtube_audio(url: str, tmp_dir: str, cookies_file: str | None) -> 
     downloaded = None
     for f in os.listdir(tmp_dir):
         full = os.path.join(tmp_dir, f)
-        if os.path.isfile(full) and f != "cookies.txt":
+        if os.path.isfile(full) and f not in ("cookies.txt", "output.mp3"):
             downloaded = full
             break
 
     if not downloaded:
-        raise HTTPException(status_code=500, detail="YouTube: fișierul nu a fost descărcat")
+        raise HTTPException(status_code=500, detail="YouTube: fisierul nu a fost descarcat")
 
     return downloaded
 
 
 def convert_to_mp3(input_path: str, output_path: str):
-    """Convertește orice fișier audio/video la MP3 192k."""
     cmd = [
         str(FFMPEG_PATH),
         "-i", input_path,
-        "-vn",           # ignoră video
+        "-vn",
         "-ar", "44100",
         "-ac", "2",
         "-b:a", "192k",
@@ -183,11 +212,15 @@ def convert_to_mp3(input_path: str, output_path: str):
         "-y"
     ]
     result = subprocess.run(cmd, capture_output=True, timeout=120)
+    stderr = result.stderr.decode(errors="replace")
+
+    print(f"FFmpeg returncode: {result.returncode}")
+    print(f"FFmpeg stderr: {stderr[-1000:]}")
 
     if result.returncode != 0 or not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
         raise HTTPException(
             status_code=500,
-            detail=f"Conversie ffmpeg eșuată:\n{result.stderr.decode(errors='replace')[-2000:]}"
+            detail=f"Conversie ffmpeg esuata:\n{stderr[-2000:]}"
         )
 
 
