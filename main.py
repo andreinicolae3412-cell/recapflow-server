@@ -56,7 +56,6 @@ async def download_audio(request: DownloadRequest):
         is_tiktok = "tiktok.com" in request.url
 
         if is_tiktok:
-            # Pasul 1: descarcă video+audio combinat
             raw_output = os.path.join(tmp_dir, f"{unique_id}_raw.mp4")
             ydl_opts = {
                 "format": "bestvideo+bestaudio/best",
@@ -79,7 +78,6 @@ async def download_audio(request: DownloadRequest):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([request.url])
 
-            # Găsește fișierul descărcat
             downloaded = None
             for f in os.listdir(tmp_dir):
                 if f.startswith(f"{unique_id}_raw"):
@@ -89,7 +87,6 @@ async def download_audio(request: DownloadRequest):
             if not downloaded or not os.path.exists(downloaded):
                 raise HTTPException(status_code=500, detail="Fișierul TikTok nu a fost descărcat")
 
-            # Pasul 2: extrage audio din mp4 și convertește la mp3
             cmd = [
                 FFMPEG_PATH,
                 "-i", downloaded,
@@ -105,11 +102,10 @@ async def download_audio(request: DownloadRequest):
             if result.returncode != 0 or not os.path.exists(mp3_output) or os.path.getsize(mp3_output) == 0:
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Conversia TikTok eșuată: {result.stderr.decode()[:300]}"
+                    detail=f"Conversia TikTok eșuată: {result.stderr.decode()[:2000]}"
                 )
 
         else:
-            # YouTube și altele
             output_template = os.path.join(tmp_dir, f"{unique_id}.%(ext)s")
             ydl_opts = {
                 "format": "bestaudio/best",
@@ -158,7 +154,7 @@ async def download_audio(request: DownloadRequest):
             if result.returncode != 0 or not os.path.exists(mp3_output) or os.path.getsize(mp3_output) == 0:
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Conversia eșuată: {result.stderr.decode()[:300]}"
+                    detail=f"Conversia eșuată: {result.stderr.decode()[:2000]}"
                 )
 
         response = FileResponse(
