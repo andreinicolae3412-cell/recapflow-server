@@ -40,124 +40,114 @@ class DownloadRequest(BaseModel):
 
 
 def download_tiktok_audio(url: str, tmp_dir: str, cookies_file: str | None) -> str:
+    """
+    TikTok are video+audio combinate in acelasi fisier mp4.
+    Lasam yt-dlp sa aleaga cel mai bun format disponibil,
+    dar ii spunem explicit sa nu faca merge (e deja combinat).
+    Apoi extragem audio cu ffmpeg.
+    """
     headers = {
         "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.165 Mobile Safari/537.36",
         "Referer": "https://www.tiktok.com/",
     }
 
-    base_opts = {
+    # Extragem URL-ul direct al fisierului video+audio
+    info_opts = {
         "quiet": True,
         "no_warnings": True,
         "socket_timeout": 30,
         "http_headers": headers,
     }
     if cookies_file:
-        base_opts["cookiefile"] = cookies_file
+        info_opts["cookiefile"] = cookies_file
 
-    # Pas 1: extrage info cu logging activ ca sa vedem formatele
-    with yt_dlp.YoutubeDL({**base_opts, "quiet": False}) as ydl:
+    with yt_dlp.YoutubeDL(info_opts) as ydl:
         info = ydl.extract_info(url, download=False)
 
-    # Pas 2: loghează TOATE formatele
     all_formats = info.get("formats", [])
-    format_log = []
-    for f in all_formats:
-        format_log.append(
-            f"id={f.get('format_id')} "
-            f"ext={f.get('ext')} "
-            f"acodec={f.get('acodec')} "
-            f"vcodec={f.get('vcodec')} "
-            f"abr={f.get('abr')} "
-            f"tbr={f.get('tbr')} "
-            f"note={f.get('format_note', '')}"
-        )
 
-    print("=== TIKTOK FORMATE ===")
-    for line in format_log:
-        print(line)
-    print("=== END FORMATE ===")
+    # Alegem h264 540p sau 720p - sunt stabile si au audio inclus
+    # Evitam bytevc1 (h265) pentru compatibilitate ffmpeg
+    preferred_ids = [
+        "h264_720p_872067-0",
+        "h264_720p_872067-1",
+        "h264_540p_331703-0",
+        "h264_540p_331703-1",
+    ]
 
-    # Pas 3: caută formate cu audio - verificare strictă
-    audio_only = []
-    video_audio = []
+    chosen_fmt = None
+    chosen_url = None
 
-    for f in all_formats:
-        acodec = f.get("acodec")
-        vcodec = f.get("vcodec")
-        fmt_id = f.get("format_id", "")
+    # Incearca formatele preferate mai intai
+    fmt_by_id = {f.get("format_id"): f for f in all_formats}
+    for pid in preferred_ids:
+        if pid in fmt_by_id:
+            f = fmt_by_id[pid]
+            if f.get("url"):
+                chosen_fmt = pid
+                chosen_url = f["url"]
+                print(f"Ales format preferat: {chosen_fmt}")
+                break
 
-        # Skip dacă acodec e None, "none", gol sau lipsă
-        if not acodec or acodec == "none":
-            continue
+    # Fallback: orice format h264 cu url direct
+    if not chosen_url:
+        for f in all_formats:
+            vcodec = f.get("vcodec", "")
+            if "h264" in vcodec and f.get("url"):
+                chosen_fmt = f.get("format_id")
+                chosen_url = f["url"]
+                print(f"Ales format h264 fallback: {chosen_fmt}")
+                break
 
-        abr = f.get("abr") or f.get("tbr") or 0
+    # Fallback final: orice format cu url direct
+    if not chosen_url:
+        for f in all_formats:
+            if f.get("url") and f.get("format_id") != "download":
+                chosen_fmt = f.get("format_id")
+                chosen_url = f["url"]
+                print(f"Ales format final fallback: {chosen_fmt}")
+                break
 
-        if not vcodec or vcodec == "none":
-            audio_only.append((abr, fmt_id))
-        else:
-            video_audio.append((abr, fmt_id))
-
-    print(f"Audio-only formats: {audio_only}")
-    print(f"Video+Audio formats: {video_audio}")
-
-    if audio_only:
-        audio_only.sort(reverse=True)
-        chosen = audio_only[0][1]
-        print(f"Ales audio-only: {chosen}")
-    elif video_audio:
-        video_audio.sort(reverse=True)
-        chosen = video_audio[0][1]
-        print(f"Ales video+audio: {chosen}")
-    else:
+    if not chosen_url:
         raise HTTPException(
             status_code=500,
-            detail="TikTok: niciun format cu audio gasit.\nFormate disponibile:\n" + "\n".join(format_log)
+            detail="TikTok: nu s-a putut obtine URL direct pentru niciun format"
         )
 
-    # Pas 4: descarca formatul ales
-    raw_path = os.path.join(tmp_dir, "tiktok_raw")
-    dl_opts = {
-        **base_opts,
-        "format": chosen,
-        "outtmpl": raw_path,
-        "retries": 5,
-        "noplaylist": True,
-    }
+    # Descarcam direct cu ffmpeg din URL-ul raw
+    # Aceasta metoda garanteaza ca extragem audio corect
+    mp3_output = os.path.join(tmp_dir, "output.mp3")
 
-    with yt_dlp.YoutubeDL(dl_opts) as ydl:
-        ydl.download([url])
+    print(f"Descarcam audio direct cu ffmpeg din format: {chosen_fmt}")
+    print(f"URL: {chosen_url[:80]}...")
 
-    # Gaseste fisierul descarcat
-    downloaded = None
-    for f in os.listdir(tmp_dir):
-        full = os.path.join(tmp_dir, f)
-        if os.path.isfile(full) and f not in ("cookies.txt", "output.mp3"):
-            downloaded = full
-            break
+    cmd = [
+        str(FFMPEG_PATH),
+        "-headers", f"Referer: https://www.tiktok.com/\r\nUser-Agent: {headers['User-Agent']}\r\n",
+        "-i", chosen_url,
+        "-vn",           # skip video
+        "-ar", "44100",
+        "-ac", "2",
+        "-b:a", "192k",
+        "-f", "mp3",
+        mp3_output,
+        "-y"
+    ]
 
-    if not downloaded:
-        raise HTTPException(status_code=500, detail="TikTok: fisierul nu a fost descarcat")
+    result = subprocess.run(cmd, capture_output=True, timeout=180)
+    stderr = result.stderr.decode(errors="replace")
 
-    print(f"Descarcat: {downloaded}, size: {os.path.getsize(downloaded)}")
+    print(f"FFmpeg TikTok returncode: {result.returncode}")
+    if result.returncode != 0:
+        print(f"FFmpeg stderr: {stderr[-1000:]}")
 
-    # Pas 5: verifica ca fisierul chiar are audio inainte de conversie
-    probe_cmd = [str(FFMPEG_PATH), "-i", downloaded]
-    probe = subprocess.run(probe_cmd, capture_output=True, timeout=30)
-    probe_output = probe.stderr.decode(errors="replace")
-    print(f"FFprobe output: {probe_output}")
-
-    if "Audio:" not in probe_output:
+    if result.returncode != 0 or not os.path.exists(mp3_output) or os.path.getsize(mp3_output) == 0:
         raise HTTPException(
             status_code=500,
-            detail=(
-                "Fisierul descarcat NU contine audio!\n"
-                "Formate disponibile:\n" + "\n".join(format_log) +
-                f"\nFormat ales: {chosen}"
-                f"\nFFmpeg info: {probe_output[-500:]}"
-            )
+            detail=f"TikTok conversie esuata:\n{stderr[-2000:]}"
         )
 
-    return downloaded
+    return mp3_output
 
 
 def download_youtube_audio(url: str, tmp_dir: str, cookies_file: str | None) -> str:
@@ -215,7 +205,7 @@ def convert_to_mp3(input_path: str, output_path: str):
     stderr = result.stderr.decode(errors="replace")
 
     print(f"FFmpeg returncode: {result.returncode}")
-    print(f"FFmpeg stderr: {stderr[-1000:]}")
+    print(f"FFmpeg stderr: {stderr[-500:]}")
 
     if result.returncode != 0 or not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
         raise HTTPException(
@@ -237,14 +227,16 @@ async def download_audio(request: DownloadRequest):
                 f.write(request.cookies)
 
         if "tiktok.com" in request.url:
-            downloaded = download_tiktok_audio(request.url, tmp_dir, cookies_file)
+            # TikTok: returneaza direct mp3_output (ffmpeg descarca si converteste)
+            final_mp3 = download_tiktok_audio(request.url, tmp_dir, cookies_file)
         else:
+            # YouTube: descarcam fisier, apoi convertim
             downloaded = download_youtube_audio(request.url, tmp_dir, cookies_file)
-
-        convert_to_mp3(downloaded, mp3_output)
+            convert_to_mp3(downloaded, mp3_output)
+            final_mp3 = mp3_output
 
         response = FileResponse(
-            mp3_output,
+            final_mp3,
             media_type="audio/mpeg",
             filename="audio.mp3"
         )
