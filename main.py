@@ -56,17 +56,30 @@ async def download_audio(request: DownloadRequest):
         is_tiktok = "tiktok.com" in request.url
 
         if is_tiktok:
-            raw_output = os.path.join(tmp_dir, f"{unique_id}_raw.mp4")
+            output_template = os.path.join(tmp_dir, f"{unique_id}_tk.%(ext)s")
+            
+            # Încearcă să găsească un format cu audio inclus
+            with yt_dlp.YoutubeDL({"quiet": True, "http_headers": {"User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.165 Mobile Safari/537.36", "Referer": "https://www.tiktok.com/"}}) as ydl:
+                info = ydl.extract_info(request.url, download=False)
+
+            # Găsește format cu audio (acodec != none)
+            best_format = None
+            for f in info.get("formats", []):
+                acodec = f.get("acodec", "none")
+                if acodec and acodec != "none":
+                    best_format = f["format_id"]
+
+            if not best_format:
+                raise HTTPException(status_code=500, detail="TikTok nu are format cu audio")
+
             ydl_opts = {
-                "format": "bestvideo+bestaudio/best",
-                "outtmpl": os.path.join(tmp_dir, f"{unique_id}_raw.%(ext)s"),
+                "format": best_format,
+                "outtmpl": output_template,
                 "quiet": True,
                 "no_warnings": True,
                 "socket_timeout": 30,
                 "retries": 3,
                 "noplaylist": True,
-                "ffmpeg_location": FFMPEG_DIR,
-                "merge_output_format": "mp4",
                 "http_headers": {
                     "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.165 Mobile Safari/537.36",
                     "Referer": "https://www.tiktok.com/",
@@ -80,7 +93,7 @@ async def download_audio(request: DownloadRequest):
 
             downloaded = None
             for f in os.listdir(tmp_dir):
-                if f.startswith(f"{unique_id}_raw"):
+                if f.startswith(f"{unique_id}_tk") and f != "cookies.txt":
                     downloaded = os.path.join(tmp_dir, f)
                     break
 
@@ -102,7 +115,7 @@ async def download_audio(request: DownloadRequest):
             if result.returncode != 0 or not os.path.exists(mp3_output) or os.path.getsize(mp3_output) == 0:
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Conversia TikTok eșuată: {result.stderr.decode()[:2000]}"
+                    detail=f"Conversia TikTok eșuată: {result.stderr.decode()[-1000:]}"
                 )
 
         else:
@@ -154,7 +167,7 @@ async def download_audio(request: DownloadRequest):
             if result.returncode != 0 or not os.path.exists(mp3_output) or os.path.getsize(mp3_output) == 0:
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Conversia eșuată: {result.stderr.decode()[:2000]}"
+                    detail=f"Conversia eșuată: {result.stderr.decode()[-1000:]}"
                 )
 
         response = FileResponse(
